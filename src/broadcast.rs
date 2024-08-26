@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use maelstrom::protocol::Message;
 use maelstrom::{done, Node, Result, Runtime};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -20,18 +21,32 @@ struct Handler {
 }
 
 struct Inner {
-    pub counter: usize,
+    counter: usize,
+    messages: HashSet<usize>,
+    topology: HashMap<String, Vec<String>>,
 }
 
 impl Inner {
     fn new() -> Self {
-        Self { counter: 0 }
+        Self {
+            counter: 0,
+            messages: HashSet::new(),
+            topology: HashMap::new(),
+        }
+    }
+
+    fn neighbors(&self, node_id: &str) -> &Vec<String> {
+        self.topology.get(node_id).unwrap()
     }
 }
 
 impl Default for Inner {
     fn default() -> Self {
-        Self { counter: 0 }
+        Self {
+            counter: 0,
+            messages: HashSet::new(),
+            topology: HashMap::new(),
+        }
     }
 }
 
@@ -47,6 +62,7 @@ impl Handler {
 impl Node for Handler {
     async fn process(&self, runtime: Runtime, req: Message) -> Result<()> {
         let msg: Result<Request> = req.body.as_obj();
+        let src: &String = &req.src;
         match msg {
             Ok(Request::Echo {}) => {
                 let echo = req.body.clone().with_type("echo_ok");
@@ -63,6 +79,47 @@ impl Node for Handler {
                 let generate = Response::GenerateOk { id };
                 return runtime.reply(req, generate).await;
             }
+            Ok(Request::Broadcast { message }) => {
+                let should_broadcast: Option<Vec<String>> = {
+                    let mut inner = self.inner.lock().unwrap();
+                    let msg_set = &mut inner.messages;
+                    if msg_set.insert(message) {
+                        Some(inner.neighbors(runtime.node_id()).clone())
+                    } else {
+                        None
+                    }
+                };
+
+                match should_broadcast {
+                    Some(neighbors) => {
+                        for n in neighbors {
+                            if *n != *src {
+                                let _ = runtime.call_async(n, Request::Broadcast { message });
+                            }
+                        }
+                    }
+                    None => {}
+                }
+
+                let broadcast_response = Response::BroadcastOk {};
+                return runtime.reply(req, broadcast_response).await;
+            }
+            Ok(Request::Read {}) => {
+                let values = {
+                    let inner = self.inner.lock().unwrap();
+                    inner.messages.clone()
+                };
+                let read_response = Response::ReadOk { messages: values };
+                return runtime.reply(req, read_response).await;
+            }
+            Ok(Request::Topology { topology }) => {
+                {
+                    let mut inner = self.inner.lock().unwrap();
+                    inner.topology = topology;
+                };
+                let topo_response = Response::TopologyOk {};
+                return runtime.reply(req, topo_response).await;
+            }
             _ => {}
         }
         done(runtime, req)
@@ -75,6 +132,13 @@ enum Request {
     Init {},
     Echo {},
     Generate {},
+    Broadcast {
+        message: usize,
+    },
+    Read {},
+    Topology {
+        topology: HashMap<String, Vec<String>>,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -82,4 +146,7 @@ enum Request {
 enum Response {
     EchoOk {},
     GenerateOk { id: String },
+    BroadcastOk {},
+    ReadOk { messages: HashSet<usize> },
+    TopologyOk {},
 }
