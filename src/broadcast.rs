@@ -1,10 +1,13 @@
 use async_trait::async_trait;
+use core::panic;
 use maelstrom::protocol::Message;
-use maelstrom::{done, Node, Result, Runtime};
+use maelstrom::{done, Node, RPCResult, Result, Runtime};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
+use tokio_context::context::Context;
 
 pub(crate) fn main() {
     let _ = Runtime::init(try_main());
@@ -94,7 +97,25 @@ impl Node for Handler {
                     Some(neighbors) => {
                         for n in neighbors {
                             if *n != *src {
-                                let _ = runtime.call_async(n, Request::Broadcast { message });
+                                let runtime_clone = runtime.clone();
+                                runtime.spawn(async move {
+                                    loop {
+                                        let (ctx, _handler) =
+                                            Context::with_timeout(Duration::from_secs(1));
+                                        let res: Result<RPCResult> = runtime_clone
+                                            .rpc(n.clone(), Request::Broadcast { message })
+                                            .await;
+                                        match res {
+                                            Ok(mut res) => match res.done_with(ctx).await {
+                                                Ok(_) => break,
+                                                Err(_) => {} // Just gonna pretend that every error
+                                                             // is a time out.
+                                            },
+                                            // Seriliazing errors!
+                                            Err(_) => panic!("What just happened?"),
+                                        }
+                                    }
+                                });
                             }
                         }
                     }
