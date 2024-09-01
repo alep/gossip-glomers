@@ -90,19 +90,25 @@ impl Node for Handler {
                             continue;
                         }
 
-                        let mut ok = true;
                         for n in neighbors {
-                            let msg = Request::BatchBroadcast {
-                                message: diff.iter().copied().collect::<Vec<usize>>(),
-                            };
-                            let (ctx, _handler) = Context::with_timeout(Duration::from_millis(400));
-                            let message = r0.call(ctx, n, msg).await;
-                            match message {
-                                Ok(_) => {}
-                                Err(_) => ok = false,
-                            }
+                            let r1 = r0.clone();
+                            let diff0 = diff.clone();
+                            tokio::spawn(async move {
+                                loop {
+                                    let msg = Request::BatchBroadcast {
+                                        message: diff0.iter().copied().collect::<Vec<usize>>(),
+                                    };
+                                    let (ctx, _handler) =
+                                        Context::with_timeout(Duration::from_millis(400));
+                                    let message = r1.call(ctx, n.clone(), msg).await;
+                                    match message {
+                                        Ok(_) => break,
+                                        Err(_) => {}
+                                    }
+                                }
+                            });
                         }
-                        if ok {
+                        {
                             let mut state = h0.inner.lock().unwrap();
                             state.broadcast = state.broadcast.union(&diff).copied().collect();
                         }
