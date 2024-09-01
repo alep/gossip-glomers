@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use core::panic;
 use maelstrom::protocol::Message;
 use maelstrom::{done, Node, RPCResult, Result, Runtime};
 use serde::{Deserialize, Serialize};
@@ -7,8 +6,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
+use std::usize;
+use tokio;
 use tokio_context::context::Context;
-
 pub(crate) fn main() {
     let _ = Runtime::init(try_main());
 }
@@ -26,6 +26,7 @@ struct Handler {
 struct Inner {
     counter: usize,
     messages: HashSet<usize>,
+    broadcast: HashSet<usize>,
     topology: HashMap<String, Vec<String>>,
 }
 
@@ -34,6 +35,7 @@ impl Inner {
         Self {
             counter: 0,
             messages: HashSet::new(),
+            broadcast: HashSet::new(),
             topology: HashMap::new(),
         }
     }
@@ -48,6 +50,7 @@ impl Default for Inner {
         Self {
             counter: 0,
             messages: HashSet::new(),
+            broadcast: HashSet::new(),
             topology: HashMap::new(),
         }
     }
@@ -65,8 +68,48 @@ impl Handler {
 impl Node for Handler {
     async fn process(&self, runtime: Runtime, req: Message) -> Result<()> {
         let msg: Result<Request> = req.body.as_obj();
-        let src: &String = &req.src;
         match msg {
+            Ok(Request::Init {}) => {
+                let (r0, h0) = (runtime.clone(), self.clone());
+                tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(Duration::from_millis(150)).await;
+                        let (neighbors, messages, broadcast) = {
+                            let state = h0.inner.lock().unwrap();
+                            let n = state.neighbors(r0.node_id()).clone();
+                            let m = state.messages.clone();
+                            let b = state.broadcast.clone();
+                            (n, m, b)
+                        };
+                        let diff = messages
+                            .difference(&broadcast)
+                            .copied()
+                            .collect::<HashSet<usize>>();
+
+                        if diff.is_empty() {
+                            continue;
+                        }
+
+                        let mut ok = true;
+                        for n in neighbors {
+                            let msg = Request::BatchBroadcast {
+                                message: diff.iter().copied().collect::<Vec<usize>>(),
+                            };
+                            let (ctx, _handler) = Context::with_timeout(Duration::from_millis(400));
+                            let message = r0.call(ctx, n, msg).await;
+                            match message {
+                                Ok(_) => {}
+                                Err(_) => ok = false,
+                            }
+                        }
+                        if ok {
+                            let mut state = h0.inner.lock().unwrap();
+                            state.broadcast = state.broadcast.union(&diff).copied().collect();
+                        }
+                    }
+                });
+            }
+
             Ok(Request::Echo {}) => {
                 let echo = req.body.clone().with_type("echo_ok");
                 return runtime.reply(req, echo).await;
@@ -83,46 +126,24 @@ impl Node for Handler {
                 return runtime.reply(req, generate).await;
             }
             Ok(Request::Broadcast { message }) => {
-                let should_broadcast: Option<Vec<String>> = {
+                {
                     let mut inner = self.inner.lock().unwrap();
                     let msg_set = &mut inner.messages;
-                    if msg_set.insert(message) {
-                        Some(inner.neighbors(runtime.node_id()).clone())
-                    } else {
-                        None
-                    }
+                    msg_set.insert(message)
                 };
 
-                match should_broadcast {
-                    Some(neighbors) => {
-                        for n in neighbors {
-                            if *n != *src {
-                                let runtime_clone = runtime.clone();
-                                runtime.spawn(async move {
-                                    loop {
-                                        let (ctx, _handler) =
-                                            Context::with_timeout(Duration::from_secs(1));
-                                        let res: Result<RPCResult> = runtime_clone
-                                            .rpc(n.clone(), Request::Broadcast { message })
-                                            .await;
-                                        match res {
-                                            Ok(mut res) => match res.done_with(ctx).await {
-                                                Ok(_) => break,
-                                                Err(_) => {} // Just gonna pretend that every error
-                                                             // is a time out.
-                                            },
-                                            // Seriliazing errors!
-                                            Err(_) => panic!("What just happened?"),
-                                        }
-                                    }
-                                });
-                            }
-                        }
-                    }
-                    None => {}
-                }
-
                 let broadcast_response = Response::BroadcastOk {};
+                return runtime.reply(req, broadcast_response).await;
+            }
+            Ok(Request::BatchBroadcast { message }) => {
+                {
+                    let mut inner = self.inner.lock().unwrap();
+                    let msg_set = &mut inner.messages;
+                    for m in message {
+                        msg_set.insert(m);
+                    }
+                };
+                let broadcast_response = Response::BatchBroadcastOk {};
                 return runtime.reply(req, broadcast_response).await;
             }
             Ok(Request::Read {}) => {
@@ -156,6 +177,9 @@ enum Request {
     Broadcast {
         message: usize,
     },
+    BatchBroadcast {
+        message: Vec<usize>,
+    },
     Read {},
     Topology {
         topology: HashMap<String, Vec<String>>,
@@ -168,6 +192,7 @@ enum Response {
     EchoOk {},
     GenerateOk { id: String },
     BroadcastOk {},
+    BatchBroadcastOk {},
     ReadOk { messages: HashSet<usize> },
     TopologyOk {},
 }
