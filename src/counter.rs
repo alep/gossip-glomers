@@ -4,6 +4,7 @@ use maelstrom::protocol::Message;
 use maelstrom::{done, Node, Result, Runtime};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::sync::Mutex;
 use tokio_context::context::Context;
 
 pub(crate) fn main() {
@@ -18,12 +19,20 @@ async fn try_main() -> Result<()> {
 
 #[derive(Clone)]
 struct Handler {
+    i: Arc<Mutex<Inner>>,
     s: Storage,
+}
+
+struct Inner {
+    c: usize,
 }
 
 impl Handler {
     fn new(runtime: Runtime) -> Self {
-        Self { s: lin_kv(runtime) }
+        Self {
+            s: lin_kv(runtime),
+            i: Arc::new(Mutex::new(Inner { c: 0 })),
+        }
     }
 }
 
@@ -33,21 +42,31 @@ impl Node for Handler {
         let msg: Result<Request> = req.body.as_obj();
         match msg {
             Ok(Request::Read {}) => {
-                let (ctx, _handler) = Context::new();
-                let value = self
-                    .s
-                    .get(ctx, runtime.node_id().to_string())
-                    .await
-                    .unwrap();
+                let mut value: usize = 0;
+                for node in runtime.neighbours() {
+                    let (ctx, _handler) = Context::new();
+                    match self.s.get::<usize>(ctx, node.to_string()).await {
+                        Ok(val) => value = value + val,
+                        Err(_) => {}
+                    }
+                }
                 let read_response = Response::ReadOk { value };
                 return runtime.reply(req, read_response).await;
             }
             Ok(Request::Add { delta }) => {
+                let val = {
+                    let i = self.i.lock().unwrap();
+                    i.c
+                };
                 let (ctx, _handler) = Context::new();
                 self.s
-                    .put(ctx, runtime.node_id().to_string(), delta)
+                    .cas(ctx, runtime.node_id().to_string(), val, val + delta, true)
                     .await
                     .unwrap();
+                {
+                    let mut i = self.i.lock().unwrap();
+                    i.c = val + delta;
+                }
                 let topo_response = Response::AddOk {};
                 return runtime.reply(req, topo_response).await;
             }
