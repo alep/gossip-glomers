@@ -16,6 +16,10 @@ path = "src/nodeid.rs"
 name = "broadcast"
 path = "src/broadcast.rs"
 
+[[bin]]
+name = "counter"
+path = "src/counter.rs"
+
 [dependencies]
 async-trait = "0.1.81"
 maelstrom-node = "0.1.6"
