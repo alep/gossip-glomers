@@ -20,6 +20,11 @@ path = "src/broadcast.rs"
 name = "counter"
 path = "src/counter.rs"
 
+[[bin]]
+name = "kafka"
+path = "src/kafka.rs"
+
+
 [dependencies]
 async-trait = "0.1.81"
 maelstrom-node = "0.1.6"

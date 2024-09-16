@@ -5,7 +5,6 @@ use maelstrom::{done, Node, Result, Runtime};
 use serde::{Deserialize, Serialize};
 use std::cmp::max;
 use std::collections::HashMap;
-use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;

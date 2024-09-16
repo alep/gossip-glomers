@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use maelstrom::protocol::Message;
-use maelstrom::{done, Node, RPCResult, Result, Runtime};
+use maelstrom::{done, Node, Result, Runtime};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
