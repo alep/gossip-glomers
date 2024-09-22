@@ -11,7 +11,6 @@ path = "src/echo.rs"
 name = "nodeid"
 path = "src/nodeid.rs"
 
-
 [[bin]]
 name = "broadcast"
 path = "src/broadcast.rs"
@@ -24,10 +23,14 @@ path = "src/counter.rs"
 name = "kafka"
 path = "src/kafka.rs"
 
+[[bin]]
+name = "tx"
+path = "src/tx.rs"
 
 [dependencies]
 async-trait = "0.1.81"
 maelstrom-node = "0.1.6"
+rand = "0.8.5"
 serde = "1.0.208"
 serde_json = "1.0.125"
 tokio = "1.40.0"
